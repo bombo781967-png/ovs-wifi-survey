@@ -1,0 +1,4 @@
+# OVS WiFi Survey
+Prototipo Android per walk test. Creare un repository GitHub privato e caricare tutti i file mantenendo le directory, inclusa .github. In Actions scegliere Build Android APK e Run workflow. Scaricare l'artifact e estrarre app-debug.apk.
+
+Android 8+. Consentire posizione precisa e attivare i servizi di localizzazione per SSID/BSSID. Tenere l'app in primo piano e disattivare i dati mobili durante il test: il ping di sistema non e' vincolato esplicitamente alla rete Wi-Fi. Lo schermo resta acceso. Campionamento nominale 1 secondo, piu' lento in caso di timeout. ICMP bloccato non implica assenza di connettivita. CSV salvato localmente tramite selettore Android. APK debug, non per distribuzione aziendale definitiva. Compilazione e test su dispositivo non verificati. Nessuna planimetria necessaria.
