@@ -1,17 +1,520 @@
+
 package it.ovs.wifisurvey;
-import android.app.*;import android.os.*;import android.content.*;import android.content.pm.PackageManager;import android.net.*;import android.net.wifi.*;import android.graphics.*;import android.media.*;import android.view.*;import android.widget.*;import java.util.*;import java.io.*;import java.util.concurrent.*;
+
+import android.app.*;
+import android.os.*;
+import android.content.*;
+import android.content.pm.PackageManager;
+import android.net.*;
+import android.net.wifi.*;
+import android.graphics.*;
+import android.media.*;
+import android.view.*;
+import android.widget.*;
+import java.util.*;
+import java.io.*;
+import java.util.concurrent.*;
+
 public class MainActivity extends Activity {
- final Handler h=new Handler(Looper.getMainLooper()); final ExecutorService worker=Executors.newSingleThreadExecutor();
- boolean running=false; int generation=0, sent=0, lost=0, roams=0, min=0; String previous="", csv=""; long start; TextView status; EditText store,target,zone; Spinner zones; Graph graph; ToneGenerator tone; WifiManager wifi; ConnectivityManager cm;
- String quote(String s){return "\""+s.replace("\"","\"\"")+"\"";}
- public void onCreate(Bundle b){super.onCreate(b);wifi=(WifiManager)getApplicationContext().getSystemService(WIFI_SERVICE);cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);tone=new ToneGenerator(AudioManager.STREAM_MUSIC,70);LinearLayout l=new LinearLayout(this);l.setOrientation(1);l.setPadding(24,24,24,24);ScrollView sc=new ScrollView(this);sc.addView(l);setContentView(sc);TextView title=new TextView(this);title.setText("OVS WiFi Survey | Walk Test");title.setTextSize(25);l.addView(title);store=new EditText(this);store.setHint("Codice ente");l.addView(store);target=new EditText(this);target.setHint("IP test aggiuntivo (opzionale)");l.addView(target);zones=new Spinner(this);zones.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Ingresso","Vendita","Casse","Camerini","Magazzino","Uffici","Personalizzata"}));l.addView(zones);zone=new EditText(this);zone.setHint("Nome zona personalizzata");l.addView(zone);status=new TextView(this);status.setTextSize(18);l.addView(status);graph=new Graph();l.addView(graph,new LinearLayout.LayoutParams(-1,300));Button go=new Button(this);go.setText("Avvia test");l.addView(go);go.setOnClickListener(v->begin());Button stop=new Button(this);stop.setText("Termina test");l.addView(stop);stop.setOnClickListener(v->stop());Button save=new Button(this);save.setText("Esporta CSV");l.addView(save);save.setOnClickListener(v->{if(running||csv.isEmpty()){status.setText("Termina prima un test");return;}Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.setType("text/csv");i.putExtra(Intent.EXTRA_TITLE,"wifi-"+System.currentTimeMillis()+".csv");startActivityForResult(i,7);});requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION,android.Manifest.permission.ACCESS_COARSE_LOCATION},1);}
- void begin(){if(running)return;if(checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION,android.Manifest.permission.ACCESS_COARSE_LOCATION},1);return;}if(store.getText().toString().trim().isEmpty()){store.setError("Inserisci codice ente");return;}running=true;generation++;sent=lost=roams=0;min=0;previous="";graph.values.clear();csv="timestamp,ente,zona,ssid,bssid,rssi_dbm,frequency_mhz,link_mbps,gateway,ping_ms,target,target_ping_ms,roaming\n";start=SystemClock.elapsedRealtime();getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);sample(generation);}
- void stop(){running=false;generation++;getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);status.append("\nTest terminato. Esporta CSV.");}
- Network wifiNetwork(){for(Network n:cm.getAllNetworks()){NetworkCapabilities c=cm.getNetworkCapabilities(n);if(c!=null&&c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))return n;}return null;}
- String gateway(Network n){if(n==null)return "";LinkProperties p=cm.getLinkProperties(n);if(p!=null)for(RouteInfo r:p.getRoutes())if(r.isDefaultRoute()&&r.getGateway() instanceof java.net.Inet4Address)return r.getGateway().getHostAddress();return "";}
- long ping(String ip){if(ip==null||!ip.matches("[0-9.]+")||ip.length()>15)return -1;try{Process p=new ProcessBuilder("/system/bin/ping","-c","1","-W","1",ip).redirectErrorStream(true).start();String s;try(BufferedReader r=new BufferedReader(new InputStreamReader(p.getInputStream()))){while((s=r.readLine())!=null){java.util.regex.Matcher m=java.util.regex.Pattern.compile("time[=<]([0-9.]+)").matcher(s);if(m.find())return Math.round(Double.parseDouble(m.group(1)));}}p.waitFor();}catch(Exception e){}return -1;}
- void sample(int g){if(!running||g!=generation)return;WifiInfo w=wifi.getConnectionInfo();Network n=wifiNetwork();String gw=gateway(n),ssid=w.getSSID(),bssid=w.getBSSID(),extra=target.getText().toString().trim(),ente=store.getText().toString(),z=zones.getSelectedItem().toString();if(z.equals("Personalizzata"))z=zone.getText().toString();final String area=z;int rssi=w.getRssi(),freq=w.getFrequency(),link=w.getLinkSpeed();boolean connected=n!=null&&bssid!=null&&!bssid.equals("02:00:00:00:00:00")&&rssi>-127;boolean roam=connected&&!previous.isEmpty()&&!previous.equals(bssid);if(connected)previous=bssid;else previous="";if(roam){roams++;tone.startTone(ToneGenerator.TONE_PROP_BEEP,120);}if(connected&&rssi<-75)tone.startTone(ToneGenerator.TONE_PROP_NACK,150);if(connected){min=Math.min(min,rssi);graph.values.add(rssi);if(graph.values.size()>120)graph.values.remove(0);graph.invalidate();}long tick=SystemClock.elapsedRealtime(),stamp=System.currentTimeMillis();worker.execute(()->{long p=ping(gw),q=ping(extra);h.post(()->{if(!running||g!=generation)return;if(!gw.isEmpty()){sent++;if(p<0)lost++;}String loss=sent==0?"N/D":String.format(Locale.US,"%.1f%%",100.0*lost/sent);status.setText("Zona: "+area+"\nSSID: "+ssid+"\nBSSID: "+bssid+"\nSegnale: "+(connected?rssi+" dBm":"N/D")+" | "+freq+" MHz\nLink: "+link+" Mbps\nGateway: "+gw+" | "+(p<0?"N/D":p+" ms")+"\nTarget: "+(q<0?"N/D":q+" ms")+"\nPacket loss gateway: "+loss+"\nRoaming: "+roams+" | Min: "+(min==0?"N/D":min)+"\nDurata: "+((tick-start)/1000)+" s");csv+=stamp+","+quote(ente)+","+quote(area)+","+quote(ssid)+","+quote(String.valueOf(bssid))+","+(connected?rssi:"")+","+freq+","+link+","+quote(gw)+","+(p<0?"":p)+","+quote(extra)+","+(q<0?"":q)+","+roam+"\n";h.postDelayed(()->sample(g),Math.max(0,1000-(SystemClock.elapsedRealtime()-tick)));});});}
- protected void onActivityResult(int req,int result,Intent data){super.onActivityResult(req,result,data);if(req==7&&result==RESULT_OK&&data!=null){try(OutputStream o=getContentResolver().openOutputStream(data.getData())){o.write(csv.getBytes(java.nio.charset.StandardCharsets.UTF_8));Toast.makeText(this,"CSV salvato",0).show();}catch(Exception e){Toast.makeText(this,"Errore esportazione",1).show();}}}
- protected void onDestroy(){running=false;generation++;worker.shutdownNow();tone.release();super.onDestroy();}
- class Graph extends View{ArrayList<Integer> values=new ArrayList<>();Paint p=new Paint(3);Graph(){super(MainActivity.this);}protected void onDraw(Canvas c){super.onDraw(c);p.setColor(Color.GRAY);p.setTextSize(24);for(int r=-90;r<=-30;r+=15){float y=15+(-30-r)*(getHeight()-30)/60f;c.drawLine(55,y,getWidth(),y,p);c.drawText(""+r,0,y,p);}p.setColor(Color.GREEN);p.setStrokeWidth(4);for(int i=1;i<values.size();i++){float x1=55+(i-1)*(getWidth()-55)/119f,x2=55+i*(getWidth()-55)/119f;float y1=15+(-30-Math.max(-90,Math.min(-30,values.get(i-1))))*(getHeight()-30)/60f,y2=15+(-30-Math.max(-90,Math.min(-30,values.get(i))))*(getHeight()-30)/60f;c.drawLine(x1,y1,x2,y2,p);}}}
+
+    final Handler h = new Handler(Looper.getMainLooper());
+    final ExecutorService worker = Executors.newSingleThreadExecutor();
+
+    boolean running = false;
+    int generation = 0, sent = 0, lost = 0, roams = 0, min = 0;
+    String previous = "", csv = "";
+    long start;
+
+    TextView status;
+    EditText store, target, zone;
+    Spinner zones;
+    Graph graph;
+    ToneGenerator tone;
+    WifiManager wifi;
+    ConnectivityManager cm;
+
+    String quote(String s) {
+        return "\"" + s.replace("\"", "\"\"") + "\"";
+    }
+
+    public void onCreate(Bundle b) {
+        super.onCreate(b);
+
+        wifi = (WifiManager) getApplicationContext()
+                .getSystemService(WIFI_SERVICE);
+
+        cm = (ConnectivityManager)
+                getSystemService(CONNECTIVITY_SERVICE);
+
+        tone = new ToneGenerator(AudioManager.STREAM_MUSIC, 70);
+
+        LinearLayout l = new LinearLayout(this);
+        l.setOrientation(1);
+        l.setPadding(24, 24, 24, 24);
+
+        ScrollView sc = new ScrollView(this);
+        sc.addView(l);
+        setContentView(sc);
+
+        TextView title = new TextView(this);
+        title.setText("OVS WiFi Survey | Walk Test");
+        title.setTextSize(25);
+        l.addView(title);
+
+        store = new EditText(this);
+        store.setHint("Codice ente");
+        l.addView(store);
+
+        target = new EditText(this);
+        target.setHint("IP test aggiuntivo (opzionale)");
+        l.addView(target);
+
+        zones = new Spinner(this);
+
+        zones.setAdapter(new ArrayAdapter<String>(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                new String[]{
+                        "Ingresso",
+                        "Vendita",
+                        "Casse",
+                        "Camerini",
+                        "Magazzino",
+                        "Uffici",
+                        "Personalizzata"
+                }
+        ));
+
+        l.addView(zones);
+
+        zone = new EditText(this);
+        zone.setHint("Nome zona personalizzata");
+        l.addView(zone);
+
+        status = new TextView(this);
+        status.setTextSize(18);
+        l.addView(status);
+
+        graph = new Graph();
+        l.addView(graph, new LinearLayout.LayoutParams(-1, 300));
+
+        Button go = new Button(this);
+        go.setText("Avvia test");
+        l.addView(go);
+        go.setOnClickListener(v -> begin());
+
+        Button stop = new Button(this);
+        stop.setText("Termina test");
+        l.addView(stop);
+        stop.setOnClickListener(v -> stop());
+
+        Button save = new Button(this);
+        save.setText("Esporta CSV");
+        l.addView(save);
+
+        save.setOnClickListener(v -> {
+
+            if (running || csv.isEmpty()) {
+                status.setText("Termina prima un test");
+                return;
+            }
+
+            Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            i.setType("text/csv");
+
+            i.putExtra(
+                    Intent.EXTRA_TITLE,
+                    "wifi-" + System.currentTimeMillis() + ".csv"
+            );
+
+            startActivityForResult(i, 7);
+        });
+
+        requestPermissions(new String[]{
+                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION
+        }, 1);
+    }
+
+    void begin() {
+
+        if (running) return;
+
+        if (checkSelfPermission(
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) != PackageManager.PERMISSION_GRANTED) {
+
+            requestPermissions(new String[]{
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+            }, 1);
+
+            return;
+        }
+
+        if (store.getText().toString().trim().isEmpty()) {
+            store.setError("Inserisci codice ente");
+            return;
+        }
+
+        running = true;
+        generation++;
+
+        sent = lost = roams = 0;
+        min = 0;
+        previous = "";
+
+        graph.values.clear();
+
+        csv = "timestamp,ente,zona,ssid,bssid,rssi_dbm,"
+                + "frequency_mhz,link_mbps,gateway,ping_ms,"
+                + "target,target_ping_ms,roaming\n";
+
+        start = SystemClock.elapsedRealtime();
+
+        getWindow().addFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        );
+
+        sample(generation);
+    }
+
+    void stop() {
+
+        running = false;
+        generation++;
+
+        getWindow().clearFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        );
+
+        status.append("\nTest terminato. Esporta CSV.");
+    }
+
+    Network wifiNetwork() {
+
+        for (Network n : cm.getAllNetworks()) {
+
+            NetworkCapabilities c = cm.getNetworkCapabilities(n);
+
+            if (c != null &&
+                    c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                return n;
+            }
+        }
+
+        return null;
+    }
+
+    String gateway(Network n) {
+
+        if (n == null) return "";
+
+        LinkProperties p = cm.getLinkProperties(n);
+
+        if (p != null) {
+
+            for (RouteInfo r : p.getRoutes()) {
+
+                if (r.isDefaultRoute() &&
+                        r.getGateway() instanceof java.net.Inet4Address) {
+
+                    return r.getGateway().getHostAddress();
+                }
+            }
+        }
+
+        return "";
+    }
+
+    long ping(String ip) {
+
+        if (ip == null ||
+                !ip.matches("[0-9.]+") ||
+                ip.length() > 15) {
+            return -1;
+        }
+
+        try {
+
+            java.lang.Process p = new ProcessBuilder(
+                    "/system/bin/ping",
+                    "-c", "1",
+                    "-W", "1",
+                    ip
+            ).redirectErrorStream(true).start();
+
+            String s;
+
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(p.getInputStream()))) {
+
+                while ((s = r.readLine()) != null) {
+
+                    java.util.regex.Matcher m =
+                            java.util.regex.Pattern
+                                    .compile("time[=<]([0-9.]+)")
+                                    .matcher(s);
+
+                    if (m.find()) {
+                        return Math.round(
+                                Double.parseDouble(m.group(1))
+                        );
+                    }
+                }
+            }
+
+            p.waitFor();
+
+        } catch (Exception e) {
+        }
+
+        return -1;
+    }
+
+    void sample(int g) {
+
+        if (!running || g != generation) return;
+
+        WifiInfo w = wifi.getConnectionInfo();
+        Network n = wifiNetwork();
+
+        String gw = gateway(n);
+        String ssid = w.getSSID();
+        String bssid = w.getBSSID();
+
+        String extra = target.getText().toString().trim();
+        String ente = store.getText().toString();
+        String z = zones.getSelectedItem().toString();
+
+        if (z.equals("Personalizzata")) {
+            z = zone.getText().toString();
+        }
+
+        final String area = z;
+
+        int rssi = w.getRssi();
+        int freq = w.getFrequency();
+        int link = w.getLinkSpeed();
+
+        boolean connected =
+                n != null &&
+                bssid != null &&
+                !bssid.equals("02:00:00:00:00:00") &&
+                rssi > -127;
+
+        boolean roam =
+                connected &&
+                !previous.isEmpty() &&
+                !previous.equals(bssid);
+
+        if (connected) {
+            previous = bssid;
+        } else {
+            previous = "";
+        }
+
+        if (roam) {
+
+            roams++;
+
+            tone.startTone(
+                    ToneGenerator.TONE_PROP_BEEP,
+                    120
+            );
+        }
+
+        if (connected && rssi < -75) {
+
+            tone.startTone(
+                    ToneGenerator.TONE_PROP_NACK,
+                    150
+            );
+        }
+
+        if (connected) {
+
+            min = Math.min(min, rssi);
+
+            graph.values.add(rssi);
+
+            if (graph.values.size() > 120) {
+                graph.values.remove(0);
+            }
+
+            graph.invalidate();
+        }
+
+        long tick = SystemClock.elapsedRealtime();
+        long stamp = System.currentTimeMillis();
+
+        worker.execute(() -> {
+
+            long p = ping(gw);
+            long q = ping(extra);
+
+            h.post(() -> {
+
+                if (!running || g != generation) return;
+
+                if (!gw.isEmpty()) {
+
+                    sent++;
+
+                    if (p < 0) lost++;
+                }
+
+                String loss = sent == 0
+                        ? "N/D"
+                        : String.format(
+                                Locale.US,
+                                "%.1f%%",
+                                100.0 * lost / sent
+                        );
+
+                status.setText(
+                        "Zona: " + area
+                        + "\nSSID: " + ssid
+                        + "\nBSSID: " + bssid
+                        + "\nSegnale: "
+                        + (connected ? rssi + " dBm" : "N/D")
+                        + " | " + freq + " MHz"
+                        + "\nLink: " + link + " Mbps"
+                        + "\nGateway: " + gw + " | "
+                        + (p < 0 ? "N/D" : p + " ms")
+                        + "\nTarget: "
+                        + (q < 0 ? "N/D" : q + " ms")
+                        + "\nPacket loss gateway: " + loss
+                        + "\nRoaming: " + roams
+                        + " | Min: " + (min == 0 ? "N/D" : min)
+                        + "\nDurata: " + ((tick - start) / 1000)
+                        + " s"
+                );
+
+                csv += stamp + ","
+                        + quote(ente) + ","
+                        + quote(area) + ","
+                        + quote(ssid) + ","
+                        + quote(String.valueOf(bssid)) + ","
+                        + (connected ? rssi : "") + ","
+                        + freq + ","
+                        + link + ","
+                        + quote(gw) + ","
+                        + (p < 0 ? "" : p) + ","
+                        + quote(extra) + ","
+                        + (q < 0 ? "" : q) + ","
+                        + roam + "\n";
+
+                h.postDelayed(
+                        () -> sample(g),
+                        Math.max(
+                                0,
+                                1000 - (
+                                        SystemClock.elapsedRealtime() - tick
+                                )
+                        )
+                );
+            });
+        });
+    }
+
+    protected void onActivityResult(
+            int req,
+            int result,
+            Intent data
+    ) {
+
+        super.onActivityResult(req, result, data);
+
+        if (req == 7 && result == RESULT_OK && data != null) {
+
+            try (OutputStream o = getContentResolver()
+                    .openOutputStream(data.getData())) {
+
+                o.write(csv.getBytes(
+                        java.nio.charset.StandardCharsets.UTF_8
+                ));
+
+                Toast.makeText(
+                        this,
+                        "CSV salvato",
+                        Toast.LENGTH_SHORT
+                ).show();
+
+            } catch (Exception e) {
+
+                Toast.makeText(
+                        this,
+                        "Errore esportazione",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+        }
+    }
+
+    protected void onDestroy() {
+
+        running = false;
+        generation++;
+
+        worker.shutdownNow();
+        tone.release();
+
+        super.onDestroy();
+    }
+
+    class Graph extends View {
+
+        ArrayList<Integer> values = new ArrayList<>();
+        Paint p = new Paint(3);
+
+        Graph() {
+            super(MainActivity.this);
+        }
+
+        protected void onDraw(Canvas c) {
+
+            super.onDraw(c);
+
+            p.setColor(Color.GRAY);
+            p.setTextSize(24);
+
+            for (int r = -90; r <= -30; r += 15) {
+
+                float y = 15 + (-30 - r)
+                        * (getHeight() - 30) / 60f;
+
+                c.drawLine(55, y, getWidth(), y, p);
+                c.drawText("" + r, 0, y, p);
+            }
+
+            p.setColor(Color.GREEN);
+            p.setStrokeWidth(4);
+
+            for (int i = 1; i < values.size(); i++) {
+
+                float x1 = 55 + (i - 1)
+                        * (getWidth() - 55) / 119f;
+
+                float x2 = 55 + i
+                        * (getWidth() - 55) / 119f;
+
+                float y1 = 15 + (
+                        -30 - Math.max(
+                                -90,
+                                Math.min(-30, values.get(i - 1))
+                        )
+                ) * (getHeight() - 30) / 60f;
+
+                float y2 = 15 + (
+                        -30 - Math.max(
+                                -90,
+                                Math.min(-30, values.get(i))
+                        )
+                ) * (getHeight() - 30) / 60f;
+
+                c.drawLine(x1, y1, x2, y2, p);
+            }
+        }
+    }
 }
